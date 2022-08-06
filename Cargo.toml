@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "interface-stdio",
+    "server",
+    "lsp_json"
+]
