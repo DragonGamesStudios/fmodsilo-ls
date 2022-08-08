@@ -3,7 +3,7 @@ mod tests {
 }
 
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use serde::{Serialize, Deserialize, de::Visitor};
 
@@ -188,6 +188,15 @@ impl<'de> Deserialize<'de> for IntegerOrString {
     }
 }
 
+impl Display for IntegerOrString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntegerOrString::Integer(i) => write!(f, "{i}"),
+            IntegerOrString::String(s) => write!(f, "\"{s}\"")
+        }
+    }
+}
+
 /// A request message to describe a request between the client and the server.
 /// Every processed request must send a response back to the sender of the request.
 #[derive(Debug, Deserialize, Serialize)]
@@ -199,6 +208,8 @@ pub struct RequestMessage<T> {
     /// The method to be invoked.
     pub method: String,
     /// The method's params
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub params: Option<T>
 }
 
@@ -236,7 +247,6 @@ pub struct ResponseError {
     pub data: Option<LSPAny>
 }
 
-#[allow(dead_code)]
 pub mod error_codes {
     use super::Integer;
     // Defined by JSON-RPC
@@ -302,15 +312,20 @@ pub mod error_codes {
 	pub const LSP_RESERVED_ERROR_RANGE_END: Integer = -32800;
 }
 
+pub type DocumentUri = String;
+pub type URI = String;
+
 /// A notification message. A processed notification message must not send a response back. They work like events.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NotificationMessage<T> {
+    /// jsonrpc version. LSP uses 2.0
+    pub jsonrpc: String,
     /// The method to be invoked.
-    method: String,
+    pub method: String,
     /// The notification's params
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    params: Option<T>
+    pub params: Option<T>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -329,7 +344,6 @@ pub struct CancelParams {
 /// # Notification
 /// * `method`: '$/cancelRequest'
 /// * `params`: CancelParams
-#[allow(dead_code)]
 pub type CancelNotification = NotificationMessage<CancelParams>;
 
 pub type ProgressToken = IntegerOrString;
@@ -350,13 +364,7 @@ pub struct ProgressParams<T> {
 /// # Notification:
 /// * `method`: '$/progress'
 /// * `params`: ProgressParams
-#[allow(dead_code)]
 pub type ProgressNotification<T> = NotificationMessage<ProgressParams<T>>;
-
-#[allow(dead_code)]
-pub type DocumentUri = String;
-#[allow(dead_code)]
-pub type URI = String;
 
 /// Client capabilities specific to regular expressions
 #[derive(Debug, Serialize, Deserialize)]
@@ -368,7 +376,6 @@ pub struct RegularExpressionsClientCapabilities {
     version: Option<String>
 }
 
-#[allow(dead_code)]
 pub const EOL: [&str; 3] = ["\n", "\r\n", "\r"];
 
 /// Position in a text document expressed as zero-based line and zero-based character offset.
@@ -385,7 +392,6 @@ pub struct Position {
     character: Uinteger
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 /// A type indicating how positions are encoded, specifically what column offsets mean.
 pub enum PositionEncodingKind {
@@ -471,7 +477,7 @@ pub struct InitializeParams {
     /// The initial trace setting. If omitted trace is disabled (`'off'`).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    pub trace_value: Option<TraceValue>,
+    pub trace: Option<TraceValue>,
     /// The workspace folders configured in the client when the server starts.
 	/// This property is only available if the client supports workspace folders.
 	/// It can be `null` if the client supports workspace folders but none are
@@ -495,6 +501,8 @@ pub struct ServerInfo {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
+    /// The capabilities the language server provides.
+    pub capabilities: ServerCapabilities,
     /// Information about the server
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
@@ -523,12 +531,10 @@ pub struct InitializedParams {}
 ///
 /// * `method`: 'initialize'
 /// * `params`: `InitializeParams`
-#[allow(dead_code)]
 pub type InitializeRequest = RequestMessage<InitializeParams>;
 
 /// # Response
 /// * `result`: `InitializeResult`
-#[allow(dead_code)]
 pub type InitializeResponse = ResponseMessage<InitializeResult>;
 
 /// The initialized notification is sent from the client to the server after the client received the result of the initialize request but before the client is sending any other request or notification to the server. The server can use the initialized notification for example to dynamically register capabilities. The initialized notification may only be sent once.
@@ -536,7 +542,6 @@ pub type InitializeResponse = ResponseMessage<InitializeResult>;
 /// # Notification:
 /// * `method`: 'initialized'
 ///* `params`: `InitializedParams`
-#[allow(dead_code)]
 pub type InitializedNotification = NotificationMessage<InitializedParams>;
 
 /// `ClientCapabilities` define capabilities for dynamic registration, workspace and text document features the client supports.
@@ -561,7 +566,7 @@ pub struct WorkspaceClientCapabilities {
 /// A `TraceValue` represents the level of verbosity with which the server systematically reports its execution
 /// trace using `$/logTrace` notifications. The initial trace value is set by the client at initialization
 /// and can be modified later using the `$/setTrace` notification.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum TraceValue {
     Off,
@@ -576,3 +581,65 @@ pub struct WorkspaceFolder {
     /// The name of the workspace folder. Used to refer to this workspace folder in the user interface.
     name: String
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetTraceParams {
+    /// The new value that should be assigned to the trace setting.
+    pub value: TraceValue
+}
+
+/// A notification that should be used by the client to modify the trace setting of the server.
+///
+/// # Notification
+///
+/// * `method`: `'$/setTrace'`
+/// * `params`: `SetTraceParams`
+pub type SetTraceNotification = NotificationMessage<SetTraceParams>;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogTraceParams {
+    /// The message to be logged.
+    pub message: String,
+    /// Additional information that can be computed if the `trace` configuration is set to `'verbose'`.
+    #[serde(skip_serializing_if = "Option::is_none  ")]
+    pub verbose: Option<String>
+}
+
+/// A notification to log the trace of the server’s execution. The amount and content of these notifications depends
+/// on the current trace configuration. If trace is 'off', the server should not send any logTrace notification. If trace is 'messages',
+/// the server should not add the 'verbose' field in the LogTraceParams.
+///
+/// `'$/logTrace'` should be used for systematic trace reporting. For single debugging messages, the server should send window/logMessage notifications.
+///
+/// # Notification
+///
+/// * `method`: `'$/logTrace'`
+/// * `params`: `LogTraceParams`
+pub type LogTraceNotification = NotificationMessage<LogTraceParams>;
+
+/// The server can signal the following capabilities
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerCapabilities {
+}
+
+pub type ShutdownParams = ();
+pub type ShutdownResult = ();
+
+/// The `shutdown` request is sent from the client to the server. It asks the server to shut down, but to not exit
+/// (otherwise the response might not be delivered correctly to the client). There is a separate `exit` notification
+/// that asks the server to exit. Clients must not send any notifications other than exit or requests to a server
+/// to which they have sent a `shutdown` request. Clients should also wait with sending the `exit` notification until
+/// they have received a response from the `shutdown` request.
+///
+/// If a server receives requests after a shutdown request those requests should error with `InvalidRequest`.
+///
+/// # Request
+/// * `method`: `'shutdown'`
+/// * `params`: `void`
+pub type ShutdownRequest = RequestMessage<()>;
+
+/// # Response
+/// * `result`: `null`
+/// * `error`: code and message set in case an exception happens during shutdown request.
+pub type ShutdownRespons = ResponseMessage<()>;

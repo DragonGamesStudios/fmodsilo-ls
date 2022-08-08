@@ -65,39 +65,59 @@ pub mod server {
     use serde::{Deserialize, Serialize};
     use serde_json::{from_value, Value, to_value};
 
-    use lsp_json::{ResponseError, IntegerOrString, ResponseMessage, error_codes, RequestMessage};
+    use lsp_json::{ResponseError, IntegerOrString, ResponseMessage, error_codes, RequestMessage, TraceValue, NotificationMessage, LogTraceNotification, LogTraceParams};
+    use uuid::Uuid;
 
     use crate::{thread::ThreadPool, fmodsilo::Workspace};
 
     mod protocol {
         use std::sync::{Arc, Mutex};
 
-        use lsp_json::{InitializeParams, InitializeResult, ResponseError, ServerInfo};
+        use lsp_json::{InitializeParams, InitializeResult, ResponseError, ServerInfo, TraceValue, SetTraceParams, ServerCapabilities, InitializedParams, ShutdownParams, ShutdownResult};
 
         use crate::fmodsilo::Workspace;
 
         use super::MessageManager;
 
         type WS = Arc<Mutex<Workspace>>;
-        type MM = Arc<Mutex<MessageManager>>;
+        type MM = Arc<MessageManager>;
 
-        pub fn initialize(_workspace: WS, _params: InitializeParams, _message_manager: &MM) -> Result<InitializeResult, ResponseError> {
-            eprintln!("Hello from initialize!.");
+        pub fn initialize(_workspace: WS, params: InitializeParams, message_manager: &MM) -> Result<InitializeResult, ResponseError> {
+            message_manager.set_trace(match params.trace {
+                Some(x) => x,
+                None => TraceValue::Off
+            });
+
+            if let TraceValue::Verbose = message_manager.get_trace() {
+                message_manager.trace_log(String::from("Server initialized."), None);
+            }
 
             Ok(InitializeResult {
+                capabilities: ServerCapabilities {},
                 server_info: Some(ServerInfo {
                     name: String::from("fmodsilo"),
                     version: Some(String::from(env!("CARGO_PKG_VERSION")))
                 })
             })
         }
+        pub fn shutdown(_workspace: WS, _params: Option<ShutdownParams>, message_manager: &MM) -> Result<ShutdownResult, ResponseError> {
+            if let TraceValue::Verbose = message_manager.get_trace() {
+                message_manager.trace_log(String::from("Server shut down."), None)
+            }
 
-        pub fn on_initialized(_workspace: WS, _params: InitializeParams, _message_manager: &MM) {
+            Ok(())
+        }
 
+        pub fn on_initialized(_workspace: WS, _params: InitializedParams, _message_manager: &MM) {
+
+        }
+
+        pub fn on_set_trace(_workspace: WS, params: SetTraceParams, message_manager: &MM) {
+            message_manager.set_trace(params.value);
         }
     }
 
-    pub trait Sender: Send {
+    pub trait Sender: Send + Sync {
         fn send(&self, message: &String) -> Result<bool, &'static str>;
     }
 
@@ -142,13 +162,11 @@ pub mod server {
                 match self.stage {
                     ReadingStage::HeaderField => {
                         if char == ' ' {
-                            if self.current_message == "Content-Length:" {
-                                self.stage = ReadingStage::ContentLength;
-                            } else if self.current_message == "Content-Type:" {
-                                self.stage = ReadingStage::ContentType;
-                            } else {
-                                return Err("Invalid header field");
-                            }
+                            self.stage = match self.current_message.as_str() {
+                                "Content-Length:" => ReadingStage::ContentLength,
+                                "Content-Type:" => ReadingStage::ContentType,
+                                s => { eprintln!("{s}"); return Err("Invalid header field")}
+                            };
 
                             self.current_message.clear();
                         } else if char == '\n' {
@@ -208,6 +226,8 @@ pub mod server {
                                 Err(_) => return Err("Error when parsing JSON content")
                             };
 
+                            self.current_message.clear();
+
                             messages.push(parsed);
                         }
                     }
@@ -220,14 +240,16 @@ pub mod server {
 
     pub struct MessageManager {
         sender: Box<dyn Sender>,
-        held_requests: HashMap<IntegerOrString, Value>
+        held_requests: Mutex<HashMap<String, Value>>,
+        trace: Mutex<TraceValue>
     }
 
     impl MessageManager {
         pub fn new(sender: Box<dyn Sender>) -> MessageManager {
             MessageManager {
                 sender,
-                held_requests: HashMap::new()
+                held_requests: Mutex::new(HashMap::new()),
+                trace: Mutex::new(TraceValue::Off)
             }
         }
 
@@ -237,42 +259,99 @@ pub mod server {
                 Err(_) => return Err("Failed to serialize.")
             };
 
+            if let Some(id) = response.id {
+                match self.get_trace() {
+                    TraceValue::Off => (),
+                    TraceValue::Messages => self.trace_log(format!("Sending response {}", id), None),
+                    TraceValue::Verbose =>
+                        self.trace_log(format!("Sending response {}", id), Some(res.clone()))
+                };
+            }
+
             self.sender.send(&res)
         }
 
-        pub fn get_request(&self, key: &IntegerOrString) -> Option<Value> {
-            match self.held_requests.get(key) {
+        pub fn send_notification<P: Serialize>(&self, notification: NotificationMessage<P>) -> Result<bool, &'static str> {
+            let not = match serde_json::to_string(&notification) {
+                Ok(res) => res,
+                Err(_) => return Err("Failed to serialize.")
+            };
+
+            if notification.method != "$/logTrace" {
+                match self.get_trace() {
+                    TraceValue::Off => (),
+                    TraceValue::Messages =>
+                    self.trace_log(format!("Sending notification {}", &notification.method), None),
+                    TraceValue::Verbose =>
+                        self.trace_log(format!("Sending notification {}", &notification.method), Some(not.clone()))
+                };
+            }
+
+            self.sender.send(&not)
+        }
+
+        pub fn get_request(&self, key: &String) -> Option<Value> {
+            match self.held_requests.lock().unwrap().get(key) {
                 Some(req) => Some(req.clone()),
                 None => None
             }
         }
 
-        pub fn free_request(&mut self, key: &IntegerOrString) -> bool {
-            self.held_requests.remove(key).is_some()
+        pub fn free_request(&self, key: &String) -> bool {
+            self.held_requests.lock().unwrap().remove(key).is_some()
         }
 
-        pub fn send_request<P: Serialize>(&mut self, request: RequestMessage<P>) -> Result<bool, &'static str> {
-            let cloned_id = match &request.id {
-                IntegerOrString::Integer(i) => IntegerOrString::Integer(*i),
-                IntegerOrString::String(s) => IntegerOrString::String(s.clone())
+        pub fn send_request<P: Serialize>(&self, mut request: RequestMessage<P>) -> Result<bool, &'static str> {
+            let uuid = Uuid::new_v4().to_string();
+            request.id = IntegerOrString::String(uuid.clone());
+
+            let req_json = match to_value(&request) {
+                Ok(v) => v,
+                Err(_) => return Err("Failed to serialize.")
             };
 
-            let req_json = match to_value(request) {
-                Ok(v) => v,
-                Err(_) => return Err("Faild to serialize.")
+            match self.get_trace() {
+                TraceValue::Off => (),
+                TraceValue::Messages => self.trace_log(format!("Sending request {} {}", &request.method, &request.id), None),
+                TraceValue::Verbose =>
+                    self.trace_log(format!("Sending request {} {}", &request.method, &request.id), Some(format!("{req_json}")))
             };
 
             let res = req_json.to_string();
 
-            self.held_requests.insert(cloned_id, req_json);
+            self.held_requests.lock().unwrap().insert(uuid, req_json);
 
             self.sender.send(&res)
+        }
+
+        pub fn set_trace(&self, trace: TraceValue) {
+            if let TraceValue::Verbose = self.get_trace() {
+                self.trace_log(format!("Setting trace value to {}", serde_json::to_string(&trace).unwrap()), None)
+            }
+
+            *self.trace.lock().unwrap() = trace;
+        }
+
+        pub fn get_trace(&self) -> TraceValue {
+            self.trace.lock().unwrap().clone()
+        }
+
+        /// Note: this does not check if the trace value is set to the right values.
+        pub fn trace_log(&self, message: String, verbose: Option<String>) {
+            self.send_notification(LogTraceNotification {
+                jsonrpc: String::from("2.0"),
+                method: String::from("$/logTrace"),
+                params: Some(LogTraceParams {
+                    message,
+                    verbose
+                })
+            }).unwrap();
         }
     }
 
     pub struct Server {
         listener: Box<dyn Listener>,
-        message_manager: Arc<Mutex<MessageManager>>,
+        message_manager: Arc<MessageManager>,
         workspace: Arc<Mutex<Workspace>>,
         pool: ThreadPool,
         initialized: bool,
@@ -285,7 +364,7 @@ pub mod server {
         pub fn new(listener: Box<dyn Listener>, sender: Box<dyn Sender>) -> Server {
             Server{
                 listener,
-                message_manager: Arc::new(Mutex::new(MessageManager::new(sender))),
+                message_manager: Arc::new(MessageManager::new(sender)),
                 workspace: Arc::new(Mutex::new(Workspace::new())),
                 pool: ThreadPool::new(10),
                 initialized: false,
@@ -293,32 +372,40 @@ pub mod server {
             }
         }
 
-        fn handle_message(&mut self, msg: &Value) -> Result<(), &'static str> {
+        fn handle_message(&mut self, msg: &Value) -> Result<(), String> {
             if let Some(params) = msg.get("params") {
                 let method = match msg.get("method") {
                     Some(m) => match m.as_str() {
                         Some(s) => s,
-                        None => return Err("Method should be a string.")
+                        None => return Err(String::from("Method should be a string."))
                     },
-                    None => return Err("Missing field method.")
+                    None => return Err(String::from("Missing field method."))
                 };
                 if let Some(id) = msg.get("id") {
                     // It's a request
                     let id = match id {
                         Value::Number(v) =>  match v.as_i64() {
                             Some(i) => IntegerOrString::Integer(i),
-                            None => return Err("Id should be a string or an integer.")
+                            None => return Err(String::from("Id should be a string or an integer."))
                         },
                         Value::String(s) => IntegerOrString::String(s.clone()),
-                        &_ => return Err("Id should be a string or an integer.")
+                        &_ => return Err(String::from("Id should be a string or an integer."))
                     };
+
+                    match self.message_manager.get_trace() {
+                        TraceValue::Messages =>
+                            self.message_manager.trace_log(format!("Received request {id} {method}."), None),
+                        TraceValue::Verbose =>
+                            self.message_manager.trace_log(format!("Received request {id} {method}.",), Some(msg.to_string())),
+                        TraceValue::Off => ()
+                    }
 
                     if !self.shutdown {
                         if !self.initialized {
                             match method {
                                 "initialize" => self.handle_request(protocol::initialize, params, id)?,
                                 &_ => {
-                                    self.message_manager.lock().unwrap().send_response(ResponseMessage::<()> {
+                                    self.message_manager.send_response(ResponseMessage::<()> {
                                         jsonrpc: String::from("2.0"),
                                         id: Some(id),
                                         result: None,
@@ -332,11 +419,26 @@ pub mod server {
                             };
                         } else {
                             match method {
-                                &_ => ()
+                                "shutdown" => {
+                                    self.handle_request(protocol::shutdown, params, id)?;
+                                    self.shutdown = true;
+                                },
+                                met => {
+                                    self.message_manager.send_response(ResponseMessage::<()> {
+                                        jsonrpc: String::from("2.0"),
+                                        id: Some(id),
+                                        result: None,
+                                        error: Some(ResponseError {
+                                            code: error_codes::METHOD_NOT_FOUND,
+                                            message: format!("Couldn'd find function bound for method {met}."),
+                                            data: None
+                                        })
+                                    }).unwrap();
+                                }
                             }
                         }
                     } else {
-                        self.message_manager.lock().unwrap().send_response(ResponseMessage::<()> {
+                        self.message_manager.send_response(ResponseMessage::<()> {
                             jsonrpc: String::from("2.0"),
                             id: Some(id),
                             result: None,
@@ -349,6 +451,14 @@ pub mod server {
                     }
                 } else {
                     // It's a notification
+                    match self.message_manager.get_trace() {
+                        TraceValue::Messages =>
+                            self.message_manager.trace_log(format!("Received notification {method}."), None),
+                        TraceValue::Verbose =>
+                            self.message_manager.trace_log(format!("Received notification {method}."), Some(msg.to_string())),
+                        TraceValue::Off => ()
+                    }
+
                     if !self.initialized && method == "initialized" {
                         self.initialized = true;
                     }
@@ -361,27 +471,41 @@ pub mod server {
                             } else {
                                 process::exit(1);
                             }
-                        }
+                        },
+                        "$/setTrace" => self.handle_notification(protocol::on_set_trace, params)?,
                         &_ => ()
                     };
                 }
             } else {
                 // It's a response
                 if let Some(id) = msg.get("id") {
-                    // It's a request
                     let id: IntegerOrString = match from_value(id.clone()) {
                         Ok(v) => v,
-                        Err(_) => return Err("Id should be a string or an integer.")
+                        Err(_) => return Err(String::from("Id should be a string or an integer."))
                     };
+                    
+                    match self.message_manager.get_trace() {
+                        TraceValue::Messages =>
+                            self.message_manager.trace_log(format!("Received response {id}."), None),
+                        TraceValue::Verbose =>
+                            self.message_manager.trace_log(format!("Received response {id}."), Some(msg.to_string())),
+                        TraceValue::Off => ()
+                    }
 
-                    let req_opt = self.message_manager.lock().unwrap().get_request(&id);
-
-                    if let Some(req) = req_opt {
-                        match req.get("method").unwrap().clone().as_str().unwrap() {
-                            &_ => ()
-                        };
-                    } else {
-                        return Err("Request with the specified id was not found.");
+                    match id {
+                        IntegerOrString::String(s) => {
+                            let req_opt = self.message_manager.get_request(&s);
+        
+                            if let Some(req) = req_opt {
+                                match req.get("method").unwrap().clone().as_str().unwrap() {
+                                    &_ => ()
+                                };
+                            } else {
+                                return Err(format!("Request with the specified id {} was not found.", &s));
+                            }
+                        },
+                        // Since FModSilo doesn't use integer ids, we can be sure we will only receive string-identified responses.
+                        IntegerOrString::Integer(_) => return Err(format!("Request with the specified id {} was not found.", &id))
                     }
                 }
             }
@@ -389,7 +513,7 @@ pub mod server {
             Ok(())
         }
 
-        pub fn push_message(&mut self, message: &String) -> Result<(), Vec<&'static str>> {
+        pub fn push_message(&mut self, message: &String) -> Result<(), Vec<String>> {
             let messages = self.listener.push_message(message).unwrap();
 
             let mut errors = vec![];
@@ -412,11 +536,24 @@ pub mod server {
             where
                 P: for<'de> Deserialize<'de> + Send + 'static,
                 R: Serialize,
-                F: FnOnce(Arc<Mutex<Workspace>>, P, &Arc<Mutex<MessageManager>>) -> LSPResult<R> + Send + 'static {
+                F: FnOnce(Arc<Mutex<Workspace>>, P, &Arc<MessageManager>) -> LSPResult<R> + Send + 'static {
             let ws = Arc::clone(&self.workspace);
             let ps = match from_value(params.to_owned()) {
                 Ok(p) => p,
-                Err(_) => return Err("Could not parse params. Invalid JSON value.")
+                Err(_) => {
+                    self.message_manager.send_response(ResponseMessage::<()> {
+                        jsonrpc: String::from("2.0"),
+                        id: Some(id),
+                        result: None,
+                        error: Some(ResponseError{
+                            code: error_codes::PARSE_ERROR,
+                            message: String::from("Could not parse params."),
+                            data: None
+                        })
+                    }).unwrap();
+
+                    return Err("Could not parse params. Invalid JSON value.")
+                }
             };
             let mm = Arc::clone(&self.message_manager);
 
@@ -434,22 +571,22 @@ pub mod server {
                 };
 
                 {
-                    let manager = mm.lock().unwrap();
-                    manager.send_response(response).unwrap();
+                    mm.send_response(response).unwrap();
                 }
             });
 
             Ok(())
         }
 
-        fn handle_notification<P, F>(&self, func: F, params: &Value) -> Result<(), &'static str>
+        fn handle_notification<P, F>(&self, func: F, params: &Value) -> Result<(), String>
             where
                 P: for<'de> Deserialize<'de> + Send + 'static,
-                F: FnOnce(Arc<Mutex<Workspace>>, P, &Arc<Mutex<MessageManager>>) + Send + 'static {
+                F: FnOnce(Arc<Mutex<Workspace>>, P, &Arc<MessageManager>) + Send + 'static {
             let ws = Arc::clone(&self.workspace);
             let ps = match from_value(params.to_owned()) {
                 Ok(p) => p,
-                Err(_) => return Err("Could not parse params. Invalid JSON value.")
+                Err(err) =>
+                    return Err(format!("Could not parse params. Invalid JSON value. At {}:{}: {}.", err.line(), err.column(), err.to_string()))
             };
             let mm = Arc::clone(&self.message_manager);
 
@@ -460,11 +597,11 @@ pub mod server {
             Ok(())
         }
 
-        fn handle_response<P, R, F>(&self, func: F, response: &Value, request: &Value, id: &IntegerOrString) -> Result<(), &'static str>
+        fn handle_response<P, R, F>(&self, func: F, response: &Value, request: &Value, id: &String) -> Result<(), &'static str>
             where
                 P: for<'de> Deserialize<'de> + Send + 'static,
                 R: for<'de> Deserialize<'de> + Send + 'static,
-                F: FnOnce(Arc<Mutex<Workspace>>, Option<P>, R, &Arc<Mutex<MessageManager>>) -> bool + Send + 'static {
+                F: FnOnce(Arc<Mutex<Workspace>>, Option<P>, R, &Arc<MessageManager>) -> bool + Send + 'static {
             let ws = Arc::clone(&self.workspace);
 
             let response = match from_value(response.clone()) {
@@ -476,14 +613,11 @@ pub mod server {
 
             let req = from_value(request.clone()).unwrap();
 
-            let moved_id = match id {
-                IntegerOrString::String(s) => IntegerOrString::String(s.clone()),
-                IntegerOrString::Integer(i) => IntegerOrString::Integer(*i)
-            };
+            let moved_id = id.clone();
 
             self.pool.execute(move || {
                 if func(ws, response, req, &mm) {
-                    mm.lock().unwrap().free_request(&moved_id);
+                    mm.free_request(&moved_id);
                 }
             });
 

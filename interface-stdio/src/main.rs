@@ -6,7 +6,7 @@ pub struct StdioSender;
 
 impl Sender for StdioSender {
     fn send(&self, message: &String) -> Result<bool, &'static str> {
-        print!("{}", message);
+        print!("Content-Length: {}\r\n\r\n{}", message.len(), message);
         io::stdout().flush().unwrap();
 
         Ok(true)
