@@ -2,7 +2,7 @@
 name = "lsp_json"
 version = "0.1.0"
 edition = "2021"
-license = "MIT or Apache 2.0"
+license = "MIT OR Apache-2.0"
 description = "Defines a LSP implementation in Rust, including serialization with serde_json."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
