@@ -9,6 +9,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "fmodsilo_interface_stdio"
+version = "0.1.0"
+dependencies = [
+ "fmodsilo_server",
+]
+
+[[package]]
+name = "fmodsilo_server"
+version = "0.1.0"
+dependencies = [
+ "lsp_json",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17,13 +34,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
-]
-
-[[package]]
-name = "interface-stdio"
-version = "0.1.0"
-dependencies = [
- "server",
 ]
 
 [[package]]
@@ -135,16 +145,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "lsp_json",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]

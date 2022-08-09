@@ -1,12 +1,11 @@
 [package]
-name = "lsp_json"
+name = "fmodsilo_interface_stdio"
 version = "0.1.0"
 edition = "2021"
 license = "MIT or Apache 2.0"
-description = "Defines a LSP implementation in Rust, including serialization with serde_json."
+description = "Defines an stdio interface for FModSilo language server."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-serde_json = "1.0.82"
-serde = {version = "1.0.100", features = ["derive"]}
+fmodsilo_server = {path = "../fmodsilo_server", version = "0.1.0"}

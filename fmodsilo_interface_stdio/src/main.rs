@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 
-use server::server::{Server, DefaultListener, Sender};
+use fmodsilo_server::server::{Server, DefaultListener, Sender};
 
 pub struct StdioSender;
 
