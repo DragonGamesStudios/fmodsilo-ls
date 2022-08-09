@@ -1,9 +1,10 @@
 [package]
 name = "fmodsilo_server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "FModSilo language server provides language features for Factorio mod development."
+repository = "https://github.com/DragonGamesStudios/fmodsilo-ls"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,4 +12,4 @@ description = "FModSilo language server provides language features for Factorio 
 serde_json = "1.0.82"
 serde = {version = "1.0.100", features = ["derive"]}
 uuid = {version = "1.1.2", features = ["v4", "fast-rng"]}
-lsp_json = {path = "../lsp_json", version = "0.1.0"}
+lsp_json = {path = "../lsp_json", version = "0.1.1"}

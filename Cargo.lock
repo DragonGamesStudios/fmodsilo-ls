@@ -10,14 +10,14 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "fmodsilo_interface_stdio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fmodsilo_server",
 ]
 
 [[package]]
 name = "fmodsilo_server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lsp_json",
  "serde",
@@ -50,7 +50,7 @@ checksum = "505e71a4706fa491e9b1b55f51b95d4037d0821ee40131190475f692b35b009b"
 
 [[package]]
 name = "lsp_json"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
