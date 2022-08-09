@@ -17,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "fmodsilo_server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lsp_json",
  "serde",
@@ -50,7 +50,7 @@ checksum = "505e71a4706fa491e9b1b55f51b95d4037d0821ee40131190475f692b35b009b"
 
 [[package]]
 name = "lsp_json"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

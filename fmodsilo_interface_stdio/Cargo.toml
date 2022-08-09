@@ -9,4 +9,4 @@ repository = "https://github.com/DragonGamesStudios/fmodsilo-ls"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-fmodsilo_server = {path = "../fmodsilo_server", version = "0.1.1"}
+fmodsilo_server = {path = "../fmodsilo_server", version = "0.2.0"}
