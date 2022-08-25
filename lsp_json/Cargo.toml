@@ -11,3 +11,4 @@ repository = "https://github.com/DragonGamesStudios/fmodsilo-ls"
 [dependencies]
 serde_json = "1.0.82"
 serde = {version = "1.0.100", features = ["derive"]}
+serde_repr = "0.1.9"

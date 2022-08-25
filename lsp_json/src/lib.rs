@@ -6,6 +6,8 @@ mod tests {
 use std::{collections::HashMap, fmt::Display};
 
 use serde::{Serialize, Deserialize, de::Visitor};
+use serde_json::{from_value, to_value};
+use serde_repr::{Serialize_repr, Deserialize_repr};
 
 /// Defines an integer number in the range of -2^31 to 2^31 - 1.
 type Integer = i64;
@@ -134,6 +136,17 @@ type LSPObject = HashMap<String, LSPAny>;
 /// LSP arrays.
 type LSPArray = Vec<LSPAny>;
 
+// Not a very rusty way, I think, but it's simple and effective
+
+pub trait FromSerialized<T: Serialize>
+    where Self: for<'de> Deserialize<'de> {
+    fn from_serialized(value: &T) -> Self {
+        from_value(to_value(value).unwrap()).unwrap()
+    }
+}
+
+impl<T: Serialize> FromSerialized<T> for LSPAny {}
+
 /// Message id type
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum IntegerOrString {
@@ -209,7 +222,7 @@ pub struct RequestMessage<T> {
     pub method: String,
     /// The method's params
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(default = "Option::default")]
     pub params: Option<T>
 }
 
@@ -225,7 +238,7 @@ pub struct ResponseMessage<T> {
     /// The result of a request. This member is REQUIRED on success.
     /// This member MUST NOT exist if there was an error invoking the method.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(default = "Option::default")]
     pub result: Option<T>,
     /// The error object in case a request fails.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -537,7 +550,9 @@ pub type InitializeRequest = RequestMessage<InitializeParams>;
 /// * `result`: `InitializeResult`
 pub type InitializeResponse = ResponseMessage<InitializeResult>;
 
-/// The initialized notification is sent from the client to the server after the client received the result of the initialize request but before the client is sending any other request or notification to the server. The server can use the initialized notification for example to dynamically register capabilities. The initialized notification may only be sent once.
+/// The initialized notification is sent from the client to the server after the client received the result of the initialize
+/// request but before the client is sending any other request or notification to the server. The server can use the initialized
+/// notification for example to dynamically register capabilities. The initialized notification may only be sent once.
 ///
 /// # Notification:
 /// * `method`: 'initialized'
@@ -559,8 +574,16 @@ pub struct ClientCapabilities {
 
 /// Workspace specific capabilities.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceClientCapabilities {
-
+    /// The client has support for file requests/notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub file_operations: Option<FileOperationsCapabilities>,
+    /// Capabilities specific to the `workspace/didChangeWatchedFiles1 notification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_change_watched_files: Option<DidChangeWatchedFilesClientCapabilities>,
 }
 
 /// A `TraceValue` represents the level of verbosity with which the server systematically reports its execution
@@ -577,9 +600,9 @@ pub enum TraceValue {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceFolder {
     /// The associated URI for this workspace folder.
-    uri: DocumentUri,
+    pub uri: DocumentUri,
     /// The name of the workspace folder. Used to refer to this workspace folder in the user interface.
-    name: String
+    pub name: String
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -621,6 +644,10 @@ pub type LogTraceNotification = NotificationMessage<LogTraceParams>;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
+    /// Workspace specific server capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub workspace: Option<WorkspaceServerCapabilities>
 }
 
 pub type ShutdownParams = ();
@@ -642,4 +669,443 @@ pub type ShutdownRequest = RequestMessage<()>;
 /// # Response
 /// * `result`: `null`
 /// * `error`: code and message set in case an exception happens during shutdown request.
-pub type ShutdownRespons = ResponseMessage<()>;
+pub type ShutdownResponse = ResponseMessage<()>;
+
+/// The client has support for file requests/notifications.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOperationsCapabilities {
+    /// The client has support for sending didCreateFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_create: Option<bool>,
+    /// The client has support for sending didRenameFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_rename: Option<bool>,
+    /// The client has support for sending didDeleteFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_delete: Option<bool>,
+}
+
+/// The server is interested in file requests/notifications.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOperationsOptions {
+    /// The server is interested in sending didCreateFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_create: Option<FileOperationRegistrationOptions>,
+    /// The server is interested in sending willCreateFiles requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub will_create: Option<FileOperationRegistrationOptions>,
+    /// The server is interested in sending didRenameFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_rename: Option<FileOperationRegistrationOptions>,
+    /// The server is interested in sending willRenameFiles requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub will_rename: Option<FileOperationRegistrationOptions>,
+    /// The server is interested in sending didDeleteFiles notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub did_delete: Option<FileOperationRegistrationOptions>,
+    /// The server is interested in sending willDeleteFiles requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub will_delete: Option<FileOperationRegistrationOptions>
+}
+
+/// The options to register for file operations.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileOperationRegistrationOptions {
+    /// The actual filters
+    pub filters: Vec<FileOperationFilter>
+}
+
+/// A filter to describe in which file operation requests or notifications the server is interested in.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOperationFilter {
+    /// A Uri like `file` or `untitled`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub scheme: Option<String>,
+    /// The actual file operation pattern.
+    pub pattern: FileOperationPattern
+}
+
+/// A pattern to describe in which file operation requests or notifications the server is interested in.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileOperationPattern {
+    /// The glob pattern to match. Glob patterns can have the following syntax:
+	/// - `*` to match one or more characters in a path segment
+	/// - `?` to match on one character in a path segment
+	/// - `**` to match any number of path segments, including none
+	/// - `{}` to group sub patterns into an OR expression. (e.g. `**​/*.{ts,js}`
+	///   matches all TypeScript and JavaScript files)
+	/// - `[]` to declare a range of characters to match in a path segment
+	///   (e.g., `example.[0-9]` to match on `example.0`, `example.1`, …)
+	/// - `[!...]` to negate a range of characters to match in a path segment
+	///   (e.g., `example.[!0-9]` to match on `example.a`, `example.b`, but
+	///   not `example.0`)
+    pub glob: String,
+    /// Wether to match files or folders with this pattern.
+    /// 
+    /// Matches both if undefined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub matches: Option<FileOperationPatternKind>,
+    /// Additional options used during matching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub options: Option<FileOperationPatternOptions>
+}
+
+/// Matching options for file operation pattern.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileOperationPatternOptions {
+    /// The pattern should me matched ignoring casing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub ignore_case: Option<bool>
+}
+
+/// A pattern kind describing if a glob pattern matches a file, a folder or both.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileOperationPatternKind {
+    /// The pattern matches a file only.
+    File,
+    /// The pattern matches a folder only.
+    Folder
+}
+
+/// Workspace specific server capabilities.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceServerCapabilities {
+    /// The server supports workspace folders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub workspace_folders: Option<WorkspaceFoldersServerCapabilities>,
+    /// The server is interested in file notifications/requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub file_operations: Option<FileOperationsOptions>
+}
+
+/// String or boolean
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StringOrBoolean {
+    String(String),
+    Boolean(bool)
+}
+
+/// Workspace folders server capabilities.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFoldersServerCapabilities {
+    /// The server has support for workspace folders
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub supported: Option<bool>,
+    /// Whether the server wants to receive workspace folder
+	/// change notifications.
+	///
+	/// If a string is provided, the string is treated as an ID
+    /// under which the notification is registered on the client
+	/// side. The ID can be used to unregister for these events
+	/// using the `client/unregisterCapability` request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub change_notifications: Option<StringOrBoolean>
+}
+
+/// The parameters sent in notifications/request for user-initiated creation of files.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateFilesParams {
+    /// An array of all files/folders created in this operation.
+    pub files: Vec<FileCreate>
+}
+
+/// Represents information on a file/folder create.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileCreate {
+    /// A file:// URI for the location of the file/folder being created.
+    pub uri: String
+}
+
+/// The did create files notification is sent from the client to the server when files were created from within the client.
+/// 
+/// # Notification
+/// * `method`: `'workspace/didCreateFiles'`
+/// * `params`: `CreateFilesParams` 
+pub type DidCreateFilesNotification = NotificationMessage<CreateFilesParams>;
+
+/// The parameters sent in notifications/request for user-initiated renames of files.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RenameFilesParams {
+    /// An array of all files/folders renamed in this operation. When a folder is renamed, only the folder
+    /// will be included, and not its children,
+    pub files: Vec<FileRename>
+}
+
+/// Represents information on a file/folder rename.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRename {
+    /// A file:// URI for the original location of the file/folder being rename.
+    pub old_uri: String,
+    /// A file:// URI for the new location of the file/folder being rename.
+    pub new_uri: String
+}
+
+/// The did rename files notification is sent from the client to the server when files were renamed from within the client.
+/// 
+/// # Notification
+/// * `method`: `'workspace/didRenameFiles'`
+/// * `params`: `RenameFilesParams` 
+pub type DidRenameFilesNotification = NotificationMessage<RenameFilesParams>;
+
+/// The parameters sent in notifications/request for user-initiated deletion of files.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteFilesParams {
+    /// An array of all files/folders deleted in this operation.
+    pub files: Vec<FileDelete>
+}
+
+/// Represents information on a file/folder delete.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileDelete {
+    /// A file:// URI for the location of the file/folder being deleted.
+    pub uri: String
+}
+
+/// The did delete files notification is sent from the client to the server when files were deleted from within the client.
+/// 
+/// # Notification
+/// * `method`: `'workspace/didDeleteFiles'`
+/// * `params`: `DeleteFilesParams` 
+pub type DidDeleteFilesNotification = NotificationMessage<DeleteFilesParams>;
+
+/// The will rename files request is sent from the client to the server before files are actually renamed as
+/// long as the rename is triggered from within the client either by a user action or by applying a workspace edit.
+/// The request can return a WorkspaceEdit which will be applied to workspace before the files are renamed.
+/// Please note that clients might drop results if computing the edit took too long or if a server constantly
+/// fails on this request. This is done to keep renames fast and reliable.
+/// 
+/// # Request:
+/// * `method`: `workspace/willRenameFiles`
+/// * `params`: `RenameFilesParams`
+pub type WillRenameFilesRequest = RequestMessage<RenameFilesParams>;
+pub type WillRenameFilesResult = Option<WorkspaceEdit>;
+
+/// A workspace edit represents changes to many resources managed in the workspace. The edit should either provide `changes` or `documentChanges`.
+/// If the client can handle versioned document edits and if `documentChanges` are present, the latter are preferred over changes.
+///
+/// Since version 3.13.0 a workspace edit can contain resource operations (create, delete or rename files and folders) as well.
+/// If resource operations are present clients need to execute the operations in the order in which they are provided.
+/// So a workspace edit for example can consist of the following two changes: (1) create file `a.txt` and (2) a text
+/// document edit which insert text into file `a.txt`. An invalid sequence (e.g. (1) delete file `a.txt` and (2) insert
+/// text into file `a.txt`) will cause failure of the operation. How the client recovers from the failure is described by
+/// the client capability: `workspace.workspaceEdit.failureHandling`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceEdit {
+
+}
+
+/// General parameters to register for a capability.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Registration {
+    /// The id used to register the request. The id can be used to deregister the request again.
+    pub id: String,
+    /// The method / capability to register for.
+    pub method: String,
+    /// Options necessary for registration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub register_options: Option<LSPAny>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegistrationParams {
+    pub registrations: Vec<Registration>
+}
+
+pub type RegistrationResult = ();
+
+/// The client/registerCapability request is sent from the server to the client to register for
+/// a new capability on the client side. Not all clients need to support dynamic capability registration.
+/// A client opts in via the dynamicRegistration property on the specific client capabilities.
+/// A client can even provide dynamic registration for capability A but not for capability B
+/// (see TextDocumentClientCapabilities as an example).
+///
+/// Server must not register the same capability both statically through the initialize result and
+/// \dynamically for the same document selector. If a server wants to support both static and dynamic
+/// registration it needs to check the client capability in the initialize request and only register the
+/// capability statically if the client doesn’t support dynamic registration for that capability.
+///
+/// # Request:
+/// * `method`: `client/registerCapability`
+/// * `params`: `RegistrationParams`
+pub type RegisterCapabilityRequest = RequestMessage<RegistrationParams>;
+
+/// # Response
+/// * `result`: `void`
+/// * `error`: code and message set in case an exception happens during the request.
+pub type RegisterCapabilityResponse = ResponseMessage<RegistrationResult>;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DidChangeWatchedFilesClientCapabilities {
+    /// Did change watched files notification supports dynamic registration.
+    /// Please note that the current protocol doesn't support static
+    /// configuration for file changes from the server side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub dynamic_registration: Option<bool>,
+    /// Whether the client has support for relative pattern or not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub relative_pattern_support: Option<bool>
+}
+
+/// Describe options to be used when registering for file system change events.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DidChangeWatchedFilesRegistrationOptions {
+    /// The watchers to register.
+    pub watchers: Vec<FileSystemWatcher>
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSystemWatcher {
+    /// The glob pattern to watch.
+    pub glob_pattern: GlobPattern,
+    /// The kind of events of interest. If omitted it defaults to watch_kind.CREATE | watch_kind.CHANGE | watch_kind.DELETE which is 7.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub kind: Option<WatchKind>
+}
+
+/// The glob pattern Either a string pattern or a relative pattern.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GlobPattern {
+    /// The glob pattern to watch relative to the base path. Glob patterns can have
+    /// the following syntax:
+    /// - `*` to match one or more characters in a path segment
+    /// - `?` to match on one character in a path segment
+    /// - `**` to match any number of path segments, including none
+    /// - `{}` to group conditions (e.g. `**​/*.{ts,js}` matches all TypeScript
+    ///   and JavaScript files)
+    /// - `[]` to declare a range of characters to match in a path segment
+    ///   (e.g., `example.[0-9]` to match on `example.0`, `example.1`, …)
+    /// - `[!...]` to negate a range of characters to match in a path segment
+    ///   (e.g., `example.[!0-9]` to match on `example.a`, `example.b`,
+    ///   but not `example.0`)
+    Pattern(String),
+    /// A relative pattern is a helper to construct glob patterns that are matched
+    /// relatively to a base URI. The common value for a `baseUri` is a workspace
+    /// folder root, but it can be another absolute URI as well.
+    #[serde(rename_all = "camelCase")]
+    RelativePattern {
+        /// A workspace folder or a base URI to which this pattern will be matched against relatively.
+        base_uri: WorkspaceFolderOrURI,
+        /// The actual glob pattern
+        pattern: String
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WorkspaceFolderOrURI {
+    URI(URI),
+    WorkspaceFolder(WorkspaceFolder)
+}
+
+pub type WatchKind = u8;
+
+pub mod watch_kind {
+    /// Interested in create events.
+    pub const CREATE: u8 = 1;
+    /// Interested in change events.
+    pub const CHANGE: u8 = 2;
+    /// Interested in delete events.
+    pub const DELETE: u8 = 4;
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DidChangeWatchedFilesParams {
+    /// The actual file events.
+    pub changes: Vec<FileEvent>
+}
+
+/// An event describing a file change.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FileEvent {
+    /// The file's URI
+    pub uri: DocumentUri,
+    /// The change type
+    #[serde(rename = "type")]
+    pub change_type: FileChangeType
+}
+
+/// The file event type
+#[derive(Debug, Serialize_repr, Deserialize_repr)]
+#[repr(u8)]
+pub enum FileChangeType {
+    /// The file got created.
+    Created = 1,
+    /// The file got changed.
+    Changed = 2,
+    /// The file got deleted.
+    Deleted = 3
+}
+
+///The watched files notification is sent from the client to the server when the client detects changes to
+/// files and folders watched by the language client (note although the name suggest that only file events
+/// are sent it is about file system events which include folders as well). It is recommended that servers
+/// register for these file system events using the registration mechanism. In former implementations clients
+/// pushed file events without the server actively asking for it.
+pub type DidChangeWatchedFilesNotification = NotificationMessage<DidChangeWatchedFilesParams>;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DidChangeWorkspaceFoldersParams {
+    /// The actual workspace folder change event.
+    pub event: WorkspaceFoldersChangeEvent
+}
+
+/// The workspace folder change event.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceFoldersChangeEvent {
+    /// The array of added workspace folders.
+    pub added: Vec<WorkspaceFolder>,
+    /// The array of removed workspace folders.
+    pub removed: Vec<WorkspaceFolder>
+}
+
+/// The `workspace/didChangeWorkspaceFolders` notification is sent from the client to the server to inform the server
+/// about workspace folder configuration changes. The notification is sent by default if both client capability
+/// `workspace.workspaceFolders` and the server capability `workspace.workspaceFolders.supported` are true;
+/// or if the server has registered itself to receive this notification. To register for the `workspace/didChangeWorkspaceFolders`
+/// send a `client/registerCapability` request from the server to the client. The registration parameter must have a registrations
+/// item of the following form, where id is a unique id used to unregister the capability (the example uses a UUID):
+///
+/// ```json
+/// {
+///     "id": "28c6150c-bd7b-11e7-abc4-cec278b6b50a",
+///	    "method": "workspace/didChangeWorkspaceFolders"
+/// }
+/// ```
+///
+/// # Notification:
+/// * `method`: `workspace/didChangeWorkspaceFolders`
+/// * `params`: [`DidChangeWorkspaceFoldersParams`]
+pub type DidChangeWorkspaceFoldersNotification = NotificationMessage<DidChangeWorkspaceFoldersParams>;
